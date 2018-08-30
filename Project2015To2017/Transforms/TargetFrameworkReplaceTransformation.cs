@@ -1,22 +1,19 @@
-using System;
 using System.Collections.Generic;
 using Project2015To2017.Definition;
 
 namespace Project2015To2017.Transforms
 {
-	public sealed class TargetFrameworkTransformation : ITransformation
+	public sealed class TargetFrameworkReplaceTransformation : ITransformationWithTargetMoment
 	{
-		public TargetFrameworkTransformation(IReadOnlyList<string> targetFrameworks)
-			: this(targetFrameworks, true)
-		{
-		}
-		public TargetFrameworkTransformation(IReadOnlyList<string> targetFrameworks, bool appendTargetFrameworkToOutputPath)
+		public TargetFrameworkReplaceTransformation(
+			IReadOnlyList<string> targetFrameworks,
+			bool appendTargetFrameworkToOutputPath = true)
 		{
 			this.TargetFrameworks = targetFrameworks;
 			this.AppendTargetFrameworkToOutputPath = appendTargetFrameworkToOutputPath;
 		}
 
-		public void Transform(Project definition, IProgress<string> progress)
+		public void Transform(Project definition)
 		{
 			if (null == definition)
 			{
@@ -32,10 +29,13 @@ namespace Project2015To2017.Transforms
 				}
 			}
 
-			definition.AppendTargetFrameworkToOutputPath = AppendTargetFrameworkToOutputPath;
+			definition.AppendTargetFrameworkToOutputPath = this.AppendTargetFrameworkToOutputPath;
 		}
 
 		public IReadOnlyList<string> TargetFrameworks { get; }
 		public bool AppendTargetFrameworkToOutputPath { get; }
+
+		public TargetTransformationExecutionMoment ExecutionMoment =>
+			TargetTransformationExecutionMoment.Early;
 	}
 }

@@ -4,19 +4,29 @@ using System.Linq;
 using System.Xml.Linq;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.Extensions.Logging;
 using Project2015To2017.Definition;
 
 namespace Project2015To2017.Reading
 {
-	public class AssemblyInfoReader
+	public sealed class AssemblyInfoReader
 	{
-		public AssemblyAttributes Read(Project project, IProgress<string> progress)
+		private readonly ILogger logger;
+
+		public AssemblyInfoReader(ILogger logger)
+		{
+			this.logger = logger;
+		}
+
+		public AssemblyAttributes Read(Project project)
 		{
 			var projectPath = project.ProjectFolder.FullName;
 
-			var compileElements = project.IncludeItems
-										 .SelectMany(x => x.Elements(project.XmlNamespace + "Compile"))
+			var compileElements = project.ItemGroups
+										 .SelectMany(x => x.Descendants(project.XmlNamespace + "Compile"))
 										 .ToList();
+
+			var missingCount = 0u;
 
 			var assemblyInfoFiles = compileElements
 										   .Attributes("Include")
@@ -35,7 +45,9 @@ namespace Project2015To2017.Reading
 													{
 														return true;
 													}
-													progress.Report($@"AssemblyInfo file '{x.FullName}' not found");
+
+													missingCount++;
+													this.logger.LogWarning($@"AssemblyInfo file '{x.FullName}' not found");
 													return false;
 												}
 											)
@@ -43,15 +55,15 @@ namespace Project2015To2017.Reading
 
 			if (assemblyInfoFiles.Count == 0)
 			{
-				progress.Report($@"Could not read from assemblyinfo, no assemblyinfo file found");
+				this.logger.LogWarning($@"Could not read from assemblyinfo, no assemblyinfo file found");
 
 				return null;
 			}
 
-			if (assemblyInfoFiles.Count > 1)
+			if (assemblyInfoFiles.Count + missingCount > 1)
 			{
 				var fileList = string.Join($",{Environment.NewLine}", assemblyInfoFiles.Select(x => x.FullName));
-				progress.Report($@"Could not read from assemblyinfo, multiple assemblyinfo files found:{Environment.NewLine}{fileList}");
+				this.logger.LogWarning($@"Could not read from assemblyinfo, multiple assemblyinfo files found:{Environment.NewLine}{fileList}");
 
 				project.HasMultipleAssemblyInfoFiles = true;
 				return null;
@@ -60,7 +72,7 @@ namespace Project2015To2017.Reading
 			var assemblyInfoFile = assemblyInfoFiles[0];
 			var assemblyInfoFileName = assemblyInfoFile.FullName;
 
-			progress.Report($"Reading assembly info from {assemblyInfoFileName}.");
+			this.logger.LogInformation($"Reading assembly info from {assemblyInfoFileName}.");
 
 			var text = File.ReadAllText(assemblyInfoFileName);
 

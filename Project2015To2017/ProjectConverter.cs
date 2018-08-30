@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Project2015To2017.Definition;
 using Project2015To2017.Reading;
 using Project2015To2017.Transforms;
@@ -11,87 +12,50 @@ using System.Runtime.CompilerServices;
 
 namespace Project2015To2017
 {
-	public class ProjectConverter
+	public sealed class ProjectConverter
 	{
-		private static IReadOnlyList<ITransformation> TransformationsToApply(ConversionOptions conversionOptions, Project project)
+		private static readonly IReadOnlyDictionary<string, string> ProjectFileMappings = new Dictionary<string, string>
 		{
-			if (project.IsModernProject)
-			{
-				return new ITransformation[]
-				{
-					new FileTransformation(),
-				};
-			}
+			{ ".csproj", "cs" },
+			{ ".vbproj", "vb" },
+			{ ".fsproj", "fs" }
+		};
 
-			return new ITransformation[]
-			{
-				new TargetFrameworkTransformation(
-					conversionOptions.TargetFrameworks,
-					conversionOptions.AppendTargetFrameworkToOutputPath),
-				new PackageReferenceTransformation(),
-				new AssemblyReferenceTransformation(),
-				new RemovePackageAssemblyReferencesTransformation(),
-				new RemovePackageImportsTransformation(),
-				new FileTransformation(),
-				new NugetPackageTransformation(),
-				new AssemblyAttributeTransformation(conversionOptions.KeepAssemblyInfo),
-				new XamlPagesTransformation()
-			};
+		private readonly ILogger logger;
+		private readonly ConversionOptions conversionOptions;
+		private readonly ProjectReader projectReader;
+		private readonly ITransformationSet transformationSet;
+
+		public ProjectConverter(
+			ILogger logger,
+			ITransformationSet transformationSet,
+			ConversionOptions conversionOptions = null)
+		{
+			this.logger = logger;
+			this.conversionOptions = conversionOptions ?? new ConversionOptions();
+			this.transformationSet = transformationSet ?? BasicReadTransformationSet.Instance;
+			this.projectReader = new ProjectReader(logger, this.conversionOptions);
 		}
 
-		public static IEnumerable<Project> Convert(
-			string target,
-			IProgress<string> progress)
-		{
-			return Convert(target, new List<ITransformation>(), new List<ITransformation>(), progress);
-		}
-
-		public static IEnumerable<Project> Convert(
-			string target,
-			ConversionOptions conversionOptions,
-			IProgress<string> progress)
-		{
-			return Convert(target, conversionOptions, new List<ITransformation>(), new List<ITransformation>(), progress);
-		}
-
-		public static IEnumerable<Project> Convert(
-			string target,
-			IReadOnlyList<ITransformation> preTransforms,
-			IReadOnlyList<ITransformation> postTransforms,
-			IProgress<string> progress
-		)
-		{
-			return Convert(target, new ConversionOptions(), preTransforms, postTransforms, progress);
-		}
-
-		public static IEnumerable<Project> Convert(
-			string target,
-			ConversionOptions conversionOptions,
-			IReadOnlyList<ITransformation> preTransforms,
-			IReadOnlyList<ITransformation> postTransforms,
-			IProgress<string> progress
-		)
+		public IEnumerable<Project> Convert(string target)
 		{
 			var extension = Path.GetExtension(target) ?? throw new ArgumentNullException(nameof(target));
 			if (extension.Length > 0)
 			{
-				extension = extension.ToLowerInvariant();
 				switch (extension)
 				{
 					case ".sln":
-						foreach (var project in ConvertSolution(target, conversionOptions, preTransforms, postTransforms, progress))
+						foreach (var project in ConvertSolution(target))
 						{
 							yield return project;
 						}
 						break;
-
-					case ".csproj":
+					case string s when ProjectFileMappings.TryGetValue(extension, out var fileExtension):
 						var file = new FileInfo(target);
-						yield return ProcessFile(file, null, conversionOptions, preTransforms, postTransforms, progress);
+						yield return this.ProcessFile(file, null);
 						break;
-
 					default:
-						progress.Report("Please specify a project or solution file.");
+						this.logger.LogCritical("Please specify a project or solution file.");
 						break;
 				}
 
@@ -102,7 +66,7 @@ namespace Project2015To2017
 			var solutionFiles = Directory.EnumerateFiles(target, "*.sln", SearchOption.TopDirectoryOnly).ToArray();
 			if (solutionFiles.Length == 1)
 			{
-				foreach (var project in ConvertSolution(solutionFiles[0], conversionOptions, preTransforms, postTransforms, progress))
+				foreach (var project in this.ConvertSolution(solutionFiles[0]))
 				{
 					yield return project;
 				}
@@ -110,109 +74,228 @@ namespace Project2015To2017
 				yield break;
 			}
 
+			var projectsProcessed = 0;
 			// Process all csprojs found in given directory
-			var projectFiles = Directory.EnumerateFiles(target, "*.csproj", SearchOption.AllDirectories).ToArray();
-			if (projectFiles.Length == 0)
+			foreach (var mapping in ProjectFileMappings)
 			{
-				progress.Report("Please specify a project file.");
-				yield break;
+				var projectFiles = Directory.EnumerateFiles(target, "*" + mapping.Key, SearchOption.AllDirectories).ToArray();
+				if (projectFiles.Length == 0)
+				{
+					continue;
+				}
+
+				if (projectFiles.Length > 1)
+				{
+					this.logger.LogInformation($"Multiple project files found under directory {target}:");
+				}
+
+				this.logger.LogInformation(string.Join(Environment.NewLine, projectFiles));
+
+				foreach (var projectFile in projectFiles)
+				{
+					// todo: rewrite both directory enumerations to use FileInfo instead of raw strings
+					yield return this.ProcessFile(new FileInfo(projectFile), null);
+					projectsProcessed++;
+				}
 			}
 
-			progress.Report($"Multiple project files found under directory {target}:");
-			progress.Report(string.Join(Environment.NewLine, projectFiles));
-			foreach (var projectFile in projectFiles)
+			if (projectsProcessed == 0)
 			{
-				// todo: rewrite both directory enumerations to use FileInfo instead of raw strings
-				yield return ProcessFile(new FileInfo(projectFile), null, conversionOptions, preTransforms, postTransforms, progress);
+				this.logger.LogCritical("Please specify a project file.");
 			}
 		}
 
-		private static IEnumerable<Project> ConvertSolution(string target, ConversionOptions conversionOptions,
-			IReadOnlyList<ITransformation> preTransforms, IReadOnlyList<ITransformation> postTransforms, IProgress<string> progress)
+		private IEnumerable<Project> ConvertSolution(string target)
 		{
-			progress.Report("Solution parsing started.");
-			var solution = SolutionReader.Instance.Read(target, progress);
+			this.logger.LogDebug("Solution parsing started.");
+			var solution = SolutionReader.Instance.Read(target, this.logger);
 
 			if (solution.ProjectPaths == null)
 			{
 				yield break;
 			}
 
-			foreach (var projectPath in solution.ProjectPaths)
+			foreach (var projectReference in solution.ProjectPaths)
 			{
-				progress.Report("Project found: " + projectPath.Include);
-				if (!projectPath.ProjectFile.Exists)
+				this.logger.LogInformation("Project found: " + projectReference.Include);
+				if (!projectReference.ProjectFile.Exists)
 				{
-					progress.Report("Project file not found at: " + projectPath.ProjectFile.FullName);
+					this.logger.LogError("Project file not found at: " + projectReference.ProjectFile.FullName);
+					continue;
 				}
-				else
-				{
-					yield return ProcessFile(projectPath.ProjectFile, solution, conversionOptions, preTransforms, postTransforms,
-						progress);
-				}
+
+				yield return this.ProcessFile(projectReference.ProjectFile, solution, projectReference);
 			}
 		}
 
-		[Obsolete]
-		private static Project ProcessFile(
-			string filePath,
-			Solution solution,
-			ConversionOptions conversionOptions,
-			IReadOnlyList<ITransformation> preTransforms,
-			IReadOnlyList<ITransformation> postTransforms,
-			IProgress<string> progress
-		) => ProcessFile(new FileInfo(filePath), solution, conversionOptions, preTransforms, postTransforms, progress);
-
-		private static Project ProcessFile(
-				FileInfo file,
-				Solution solution,
-				ConversionOptions conversionOptions,
-				IReadOnlyList<ITransformation> preTransforms,
-				IReadOnlyList<ITransformation> postTransforms,
-				IProgress<string> progress
-			)
+		private Project ProcessFile(FileInfo file, Solution solution, ProjectReference reference = null)
 		{
-			if (!Validate(file, progress))
+			if (!Validate(file, this.logger))
 			{
 				return null;
 			}
 
-			var project = new ProjectReader(file, progress).Read();
+			var project = this.projectReader.Read(file);
 			if (project == null)
 			{
 				return null;
 			}
 
+			project.CodeFileExtension = ProjectFileMappings[file.Extension];
+			if (reference?.ProjectName != null)
+			{
+				project.ProjectName = reference.ProjectName;
+			}
+
 			project.Solution = solution;
 
-			foreach (var transform in preTransforms)
+			foreach (var transform in this.conversionOptions.PreDefaultTransforms)
 			{
-				transform.Transform(project, progress);
+				transform.Transform(project);
 			}
 
-			foreach (var transform in TransformationsToApply(conversionOptions, project))
+			foreach (var transform in TransformationsToApply())
 			{
-				transform.Transform(project, progress);
+				if (project.IsModernProject && transform is ILegacyOnlyProjectTransformation)
+				{
+					continue;
+				}
+
+				if (!project.IsModernProject && transform is IModernOnlyProjectTransformation)
+				{
+					continue;
+				}
+
+				transform.Transform(project);
 			}
 
-			foreach (var transform in postTransforms)
+			foreach (var transform in this.conversionOptions.PostDefaultTransforms)
 			{
-				transform.Transform(project, progress);
+				transform.Transform(project);
 			}
 
 			return project;
 		}
 
-		internal static bool Validate(FileInfo file, IProgress<string> progress)
+		internal static bool Validate(FileInfo file, ILogger logger)
 		{
 			if (file.Exists)
 			{
 				return true;
 			}
 
-			progress.Report($"File {file.FullName} could not be found.");
+			logger.LogError($"File {file.FullName} could not be found.");
 			return false;
+		}
 
+		private IReadOnlyCollection<ITransformation> TransformationsToApply()
+		{
+			var all = this.transformationSet.Transformations(this.logger, this.conversionOptions);
+			var (normal, others) = all.Split(FilterTargetNormalTransformations);
+			var (early, late) = others.Split(x =>
+				((ITransformationWithTargetMoment) x).ExecutionMoment == TargetTransformationExecutionMoment.Early);
+			var res = new List<ITransformation>(all.Count);
+			TopologicalSort(early, res, this.logger);
+			TopologicalSort(normal, res, this.logger);
+			TopologicalSort(late, res, this.logger);
+			return res;
+		}
+
+		private static void TopologicalSort(
+			IReadOnlyList<ITransformation> source,
+			ICollection<ITransformation> target,
+			ILogger logger)
+		{
+			var count = source.Count;
+			if (count == 0)
+			{
+				return;
+			}
+
+			// When Span<T> becomes available - replace with
+			// var used = count <= 256 ? stackalloc byte[count] : new byte[count];
+			var used = new byte[count];
+			var res = new LinkedList<ITransformation>();
+			var mappings = new Dictionary<string, int>();
+			for (var i = 0; i < count; i++)
+			{
+				var transformation = source[i];
+				if (transformation == null)
+				{
+					throw new ArgumentNullException(nameof(transformation),
+						"Transformation set must not contain null items");
+				}
+
+				mappings.Add(transformation.GetType().Name, i);
+			}
+
+			for (var i = 0; i < count; i++)
+			{
+				if (used[i] != 0)
+				{
+					continue;
+				}
+
+				TopologicalSortInternal(source, i, used, mappings, res, logger);
+			}
+
+			// topological order on reverse graph is reverse topological order on the original
+			var item = res.Last;
+			while (item != null)
+			{
+				target.Add(item.Value);
+				item = item.Previous;
+			}
+		}
+
+		private static void TopologicalSortInternal(
+			IReadOnlyList<ITransformation> source,
+			int vertex,
+			byte[] used,
+			IDictionary<string, int> mappings,
+			LinkedList<ITransformation> res,
+			ILogger logger)
+		{
+			if (used[vertex] == 1)
+			{
+				throw new InvalidOperationException(
+					"Transformation set contains dependency cycle, DAG is required to build transformation tree");
+			}
+
+			if (used[vertex] != 0)
+			{
+				return;
+			}
+
+			used[vertex] = 1;
+			var item = source[vertex];
+			var name = item.GetType().Name;
+			if (item is ITransformationWithDependencies itemWithDependencies)
+			{
+				foreach (var dependencyName in itemWithDependencies.DependOn)
+				{
+					if (!mappings.TryGetValue(dependencyName, out var mapping))
+					{
+						logger.LogWarning($"Unable to find {dependencyName} as dependency for {name}");
+						continue;
+					}
+
+					TopologicalSortInternal(source, mapping, used, mappings, res, logger);
+				}
+			}
+
+			used[vertex] = 2;
+			res.AddFirst(item);
+		}
+
+		private static bool FilterTargetNormalTransformations(ITransformation x)
+		{
+			if (x is ITransformationWithTargetMoment m)
+			{
+				return m.ExecutionMoment == TargetTransformationExecutionMoment.Normal;
+			}
+
+			return true;
 		}
 	}
 }

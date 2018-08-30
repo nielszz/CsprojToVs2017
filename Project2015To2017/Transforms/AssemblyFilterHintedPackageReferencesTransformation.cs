@@ -1,13 +1,12 @@
-using System;
 using System.IO;
 using System.Linq;
 using Project2015To2017.Definition;
 
 namespace Project2015To2017.Transforms
 {
-	internal sealed class RemovePackageAssemblyReferencesTransformation : ITransformation
+	public sealed class AssemblyFilterHintedPackageReferencesTransformation : ILegacyOnlyProjectTransformation
 	{
-		public void Transform(Project definition, IProgress<string> progress)
+		public void Transform(Project definition)
 		{
 			if (definition.PackageReferences == null || definition.PackageReferences.Count == 0)
 			{
@@ -23,12 +22,16 @@ namespace Project2015To2017.Transforms
 			var packagePaths = packageReferenceIds.Select(packageId => Path.Combine(nugetRepositoryPath, packageId).ToLower())
 				.ToArray();
 
-			var filteredAssemblies = definition.AssemblyReferences
-				.Where(assembly => !packagePaths.Any(
+			var (filteredAssemblies, removeQueue) = definition.AssemblyReferences
+				.Split(assembly => !packagePaths.Any(
 						packagePath => AssemblyMatchesPackage(assembly, packagePath)
 					)
-				)
-				.ToList();
+				);
+
+			foreach (var assemblyReference in removeQueue)
+			{
+				assemblyReference.DefinitionElement?.Remove();
+			}
 
 			definition.AssemblyReferences = filteredAssemblies;
 

@@ -5,6 +5,7 @@ using System.Linq;
 using Project2015To2017.Definition;
 using Project2015To2017.Reading;
 using Project2015To2017.Transforms;
+using Project2015To2017;
 
 namespace Project2015To2017Tests
 {
@@ -14,9 +15,7 @@ namespace Project2015To2017Tests
 		[TestMethod]
 		public void ConvertsNuspec()
 		{
-			var project = new ProjectReader(Path.Combine("TestFiles", "OtherTestProjects", "net46console.testcsproj")).Read();
-
-			project.AssemblyName = "TestAssembly";
+			var project = new ProjectReader().Read(Path.Combine("TestFiles", "OtherTestProjects", "net46console.testcsproj"));
 
 			project.AssemblyAttributes =
 								new AssemblyAttributes {
@@ -28,8 +27,7 @@ namespace Project2015To2017Tests
 									Company = "assembly author"
 								};
 
-			var progress = new Progress<string>(x => { });
-			new NugetPackageTransformation().Transform(project, progress);
+			new NuGetPackageTransformation().Transform(project);
 
 			var transformedPackageConfig = project.PackageConfiguration;
 
@@ -47,7 +45,7 @@ namespace Project2015To2017Tests
 		[TestMethod]
 		public void ConvertsNuspecWithNoInformationalVersion()
 		{
-			var project = new ProjectReader(Path.Combine("TestFiles", "OtherTestProjects", "net46console.testcsproj")).Read();
+			var project = new ProjectReader().Read(Path.Combine("TestFiles", "OtherTestProjects", "net46console.testcsproj"));
 
 			project.AssemblyAttributes =
 				new AssemblyAttributes {
@@ -58,8 +56,7 @@ namespace Project2015To2017Tests
 					Company = "assembly author"
 				};
 
-			var progress = new Progress<string>(x => { });
-			new NugetPackageTransformation().Transform(project, progress);
+			new NuGetPackageTransformation().Transform(project);
 
 			var transformedPackageConfig = project.PackageConfiguration;
 
@@ -69,7 +66,7 @@ namespace Project2015To2017Tests
 		[TestMethod]
 		public void ConvertsDependencies()
 		{
-			var project = new ProjectReader(Path.Combine("TestFiles", "OtherTestProjects", "net46console.testcsproj")).Read();
+			var project = new ProjectReader().Read(Path.Combine("TestFiles", "OtherTestProjects", "net46console.testcsproj"));
 
 			project.PackageReferences = new[]
 										{
@@ -85,9 +82,7 @@ namespace Project2015To2017Tests
 											}
 										};
 
-			var progress = new Progress<string>(x => { });
-
-			new NugetPackageTransformation().Transform(project, progress);
+			new NuGetPackageTransformation().Transform(project);
 
 			Assert.AreEqual("[10.0.2,11)", project.PackageReferences.Single(x => x.Id == "Newtonsoft.Json").Version);
 			Assert.AreEqual("1.0.2", project.PackageReferences.Single(x => x.Id == "Other.Package").Version);

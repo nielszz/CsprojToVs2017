@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -7,9 +6,9 @@ using Project2015To2017.Definition;
 
 namespace Project2015To2017.Transforms
 {
-	internal sealed class RemovePackageImportsTransformation : ITransformation
+	public sealed class ImportsTargetsFilterPackageReferencesTransformation : ILegacyOnlyProjectTransformation
 	{
-		public void Transform(Project definition, IProgress<string> progress)
+		public void Transform(Project definition)
 		{
 			if (definition.PackageReferences == null || definition.PackageReferences.Count == 0)
 			{

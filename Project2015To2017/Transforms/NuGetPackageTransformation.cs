@@ -1,20 +1,22 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.Extensions.Logging;
 using Project2015To2017.Definition;
 
 namespace Project2015To2017.Transforms
 {
-	internal sealed class NugetPackageTransformation : ITransformation
+	public sealed class NuGetPackageTransformation
+		: ITransformationWithTargetMoment, ILegacyOnlyProjectTransformation
 	{
-		public void Transform(Project definition, IProgress<string> progress)
+		public void Transform(Project definition)
 		{
 			if (definition.PackageConfiguration == null)
 			{
 				return;
 			}
-			
-			var packageConfig = PopulatePlaceHolders(definition.PackageConfiguration, definition);
+
+			var packageConfig = PopulatePlaceHolders(definition);
 
 			ConstrainPackageReferences(definition.PackageReferences, packageConfig);
 
@@ -46,8 +48,9 @@ namespace Project2015To2017.Transforms
 			}
 		}
 
-		private PackageConfiguration PopulatePlaceHolders(PackageConfiguration rawPackageConfig, Project project)
+		private PackageConfiguration PopulatePlaceHolders(Project project)
 		{
+			var rawPackageConfig = project.PackageConfiguration;
 			var assemblyAttributes = project.AssemblyAttributes;
 
 			return new PackageConfiguration
@@ -75,10 +78,11 @@ namespace Project2015To2017.Transforms
 			{
 				return assemblyAttributeValue ?? nuSpecValue;
 			}
-			else
-			{
-				return nuSpecValue;
-			}
+
+			return nuSpecValue;
 		}
+
+		public TargetTransformationExecutionMoment ExecutionMoment =>
+			TargetTransformationExecutionMoment.Early;
 	}
 }
